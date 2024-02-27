@@ -1,12 +1,15 @@
 using System.Security.Claims;
 using Duende.IdentityServer;
+using Duende.IdentityServer.Events;
+using Duende.IdentityServer.Extensions;
+using Duende.IdentityServer.Services;
 using IdentityModel;
 using Idp;
 using Idp.Data;
 using Idp.Models;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
@@ -109,10 +112,44 @@ app.MapGet("/challenge/callback", async (HttpContext httpContext, UserManager<Ap
     return TypedResults.Redirect(returnUrl);
 });
 
-app.MapGet("/account/logout", (string? logoutId) =>
+app.MapGet("/account/logout", async Task<IResult> (
+    string? logoutId,
+    HttpContext httpContext,
+    ClaimsPrincipal user,
+    SignInManager<AppUser> signinManager,
+    IIdentityServerInteractionService interactionService,
+    IEventService events,
+    LinkGenerator linkGenerator) =>
 {
-    
+    if (user.Identity?.IsAuthenticated is true)
+    {
+        logoutId ??= await interactionService.CreateLogoutContextAsync();
+
+        var logout = await interactionService.GetLogoutContextAsync(logoutId);
+        var postLogoutUrl = logout?.PostLogoutRedirectUri;
+
+        await signinManager.SignOutAsync();
+
+        var idp = user.FindFirst(JwtClaimTypes.IdentityProvider)?.Value;
+        await events.RaiseAsync(new UserLogoutSuccessEvent(user.GetSubjectId(), user.GetDisplayName()));
+
+        if (idp is not null and not IdentityServerConstants.LocalIdentityProvider)
+            if (await httpContext.GetSchemeSupportsSignOutAsync(idp))
+            {
+                var url = linkGenerator.GetPathByName("LoggedOut", new { logoutId });
+                return TypedResults.SignOut(new AuthenticationProperties
+                {
+                    RedirectUri = url
+                }, [idp]);
+            }
+    }
+
+    var redirectUrl = linkGenerator.GetPathByName("LoggedOut", new { logoutId });
+    return TypedResults.Redirect(redirectUrl);
 });
+
+app.MapGet("/account/logout/loggedout", () => { })
+    .WithName("LoggedOut");
 
 app.Run();
 return;
@@ -176,4 +213,14 @@ static void CaptureExternalLoginContext(AuthenticateResult externalResult, IColl
     var idToken = externalResult.Properties?.GetTokenValue("id_token");
     if (idToken is not null)
         localSigninProps.StoreTokens(new[] { new AuthenticationToken { Name = "id_token", Value = idToken } });
+}
+
+internal static class Extensions
+{
+    public static async Task<bool> GetSchemeSupportsSignOutAsync(this HttpContext httpContext, string scheme)
+    {
+        var provider = httpContext.RequestServices.GetRequiredService<IAuthenticationHandlerProvider>();
+        var handler = await provider.GetHandlerAsync(httpContext, scheme);
+        return handler is IAuthenticationSignOutHandler;
+    }
 }

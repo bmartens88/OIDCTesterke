@@ -26,6 +26,8 @@ builder.Services.AddAuthentication(opts =>
 
 builder.Services.AddAuthorization();
 
+builder.Services.AddRazorPages();
+
 var app = builder.Build();
 
 app.MapGet("/", async (IAuthenticationSchemeProvider schemeProvider) =>
@@ -53,7 +55,9 @@ app.MapGet("/challenge/callback", async (HttpContext httpContext) =>
     return TypedResults.Ok(claims);
 });
 
-app.MapGet("/signout", () => TypedResults.SignOut(authenticationSchemes:
-    [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]));
+app.MapRazorPages();
+
+// app.MapGet("/signout", () => TypedResults.SignOut(authenticationSchemes:
+//     [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]));
 
 app.Run();
